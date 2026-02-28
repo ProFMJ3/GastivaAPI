@@ -1,0 +1,59 @@
+# Environnements virtuels
+venv/
+ENV/
+env/
+.venv
+
+# Variables d'environnement
+.env
+.env.local
+*.env
+GastivaAPI/.env
+
+# Fichiers compilés Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+
+# IDE et éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+
+# Base de données
+db.sqlite3
+*.db
+
+# Logs
+*.log
+logs/
+
+# Cache et dépendances
+.pytest_cache/
+htmlcov/
+.coverage
+.tox/
+*.cover
+node_modules/
+
+# Fichiers temporaires
+*.tmp
+*.bak
+*~
+.~*
+
+# Dossiers spécifiques au projet
+media/
+static/
+*.vscode-settings
