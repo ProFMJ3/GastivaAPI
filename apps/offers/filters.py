@@ -49,3 +49,54 @@ class FoodOfferFilter(django_filters.FilterSet):
                 pickup_deadline__gt=now,
                 available_from__lte=now
             )
+        
+
+
+
+class HomeOffersFilter(django_filters.FilterSet):
+    """
+    Filtres spécifiques pour la page d'accueil.
+    """
+    # Filtres de recherche
+    search = django_filters.CharFilter(method='filter_search')
+    
+    # Filtres de catégorie
+    category = django_filters.NumberFilter(field_name='category_id')
+    category_slug = django_filters.CharFilter(field_name='category__slug')
+    partner_category = django_filters.CharFilter(field_name='partner__category__slug')
+    
+    # Filtres de prix
+    min_price = django_filters.NumberFilter(field_name='discounted_price', lookup_expr='gte')
+    max_price = django_filters.NumberFilter(field_name='discounted_price', lookup_expr='lte')
+    
+    # Filtre urgent
+    urgent = django_filters.BooleanFilter(method='filter_urgent')
+    
+    # Filtre quartier
+    quarter = django_filters.CharFilter(field_name='partner__quarter', lookup_expr='icontains')
+
+    class Meta:
+        model = FoodOffer
+        fields = []
+
+    def filter_search(self, queryset, name, value):
+        """Recherche multi-champs."""
+        return queryset.filter(
+            models.Q(title__icontains=value) |
+            models.Q(description__icontains=value) |
+            models.Q(partner__name__icontains=value)
+        )
+
+    def filter_urgent(self, queryset, name, value):
+        """Filtre les offres urgentes (expirant bientôt)."""
+        if value:
+            hours = self.data.get('expiring_hours', 1)
+            if isinstance(hours, str):
+                try:
+                    hours = int(hours)
+                except ValueError:
+                    hours = 1
+            
+            deadline = timezone.now() + timezone.timedelta(hours=hours)
+            return queryset.filter(pickup_deadline__lte=deadline)
+        return queryset

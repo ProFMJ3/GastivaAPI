@@ -141,6 +141,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'reviews', 'description': 'Avis et notations'},
         {'name': 'notifications', 'description': 'Notifications'},
     ],
+    
 }
 
 # Simple JWT settings

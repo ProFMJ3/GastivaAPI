@@ -21,6 +21,9 @@ urlpatterns = [
     # ========================================================================
     # OFFERS - LISTS AND SEARCH
     # ========================================================================
+     path('home/', 
+         views.HomeOffersView.as_view(), 
+         name='home-offers'),
     
     # GET /api/offers/ - List offers
     path('',
@@ -55,6 +58,7 @@ urlpatterns = [
     # ========================================================================
     # OFFERS - CRUD
     # ========================================================================
+    
     
     # POST /api/offers/create/ - Create offer
     path('create/',

@@ -248,3 +248,103 @@ class FoodOfferStatsSerializer(serializers.Serializer):
     total_reserved = serializers.IntegerField()
     average_discount = serializers.FloatField()
     most_popular_category = serializers.DictField(allow_null=True)
+
+
+
+
+    from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
+from collections import OrderedDict
+
+
+class PaginatedResponseSerializer(serializers.Serializer):
+    """
+    Serializer générique pour les réponses paginées.
+    Utilisation: PaginatedResponseSerializer(serializer=FoodOfferListSerializer)
+    """
+    count = serializers.IntegerField(
+        help_text="Nombre total d'éléments"
+    )
+    next = serializers.URLField(
+        allow_null=True,
+        help_text="URL de la page suivante"
+    )
+    previous = serializers.URLField(
+        allow_null=True,
+        help_text="URL de la page précédente"
+    )
+    total_pages = serializers.IntegerField(
+        help_text="Nombre total de pages"
+    )
+    current_page = serializers.IntegerField(
+        help_text="Numéro de la page courante"
+    )
+    results = serializers.SerializerMethodField(
+        help_text="Liste des résultats de la page courante"
+    )
+    
+    # Champs supplémentaires pour la page d'accueil
+    filters_applied = serializers.DictField(
+        child=serializers.CharField(allow_null=True),
+        help_text="Filtres appliqués à la requête",
+        required=False
+    )
+    quick_stats = serializers.DictField(
+        child=serializers.IntegerField(allow_null=True),
+        help_text="Statistiques rapides",
+        required=False
+    )
+
+    def __init__(self, *args, **kwargs):
+        # Extraire le serializer des résultats
+        self.results_serializer = kwargs.pop('serializer', None)
+        super().__init__(*args, **kwargs)
+
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
+    def get_results(self, obj):
+        """
+        Retourne les résultats sérialisés avec le serializer fourni.
+        """
+        if self.results_serializer and 'results' in obj:
+            # Si nous avons un serializer pour les résultats et que obj contient 'results'
+            if isinstance(obj, dict) and 'results' in obj:
+                results_data = obj['results']
+                if hasattr(self.results_serializer, 'many'):
+                    serializer = self.results_serializer(results_data, many=True)
+                else:
+                    # Créer une instance du serializer avec many=True
+                    serializer = self.results_serializer(
+                        instance=results_data,
+                        many=True,
+                        context=self.context
+                    )
+                return serializer.data
+        return obj.get('results', [])
+
+    def to_representation(self, instance):
+        """
+        Convertit l'instance en représentation sérialisée.
+        """
+        # Si instance est déjà un OrderedDict (comme dans get_paginated_response)
+        if isinstance(instance, OrderedDict):
+            data = dict(instance)
+        else:
+            data = instance
+
+        # Structure de base
+        result = {
+            'count': data.get('count', 0),
+            'next': data.get('next'),
+            'previous': data.get('previous'),
+            'total_pages': data.get('total_pages', 1),
+            'current_page': data.get('current_page', 1),
+            'results': self.get_results(data),
+        }
+
+        # Ajouter les champs optionnels
+        if 'filters_applied' in data:
+            result['filters_applied'] = data['filters_applied']
+        if 'quick_stats' in data:
+            result['quick_stats'] = data['quick_stats']
+
+        return result

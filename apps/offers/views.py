@@ -3,17 +3,19 @@ from rest_framework import generics, permissions, filters, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
-from drf_spectacular.utils import extend_schema, OpenApiParameter
-from django.db.models import Q, Count, Avg
+from drf_spectacular.utils import F, extend_schema, OpenApiParameter
+from django.db.models import Q, Count, Avg, ExpressionWrapper, FloatField
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
+
+from apps.offers.pagination import StandardPagination
 
 from .models import FoodOffer, FoodCategory
 from .serializers import (
     FoodCategorySerializer, FoodCategoryDetailSerializer,
     FoodOfferListSerializer, FoodOfferDetailSerializer,
     FoodOfferCreateUpdateSerializer, FoodOfferStatusUpdateSerializer,
-    FoodOfferReserveSerializer, FoodOfferStatsSerializer
+    FoodOfferReserveSerializer, FoodOfferStatsSerializer, PaginatedResponseSerializer
 )
 from .filters import FoodOfferFilter
 from .permissions import IsOfferOwnerOrReadOnly, CanCreateOffer, IsOwnerOrAdmin
@@ -82,6 +84,7 @@ class FoodOfferListView(generics.ListAPIView):
     search_fields = ['title', 'description', 'partner__name']
     ordering_fields = ['discounted_price', 'pickup_deadline', 'created_at']
     ordering = ['-created_at']
+    permission_classes = [permissions.AllowAny]
 
     def get_queryset(self):
         """
@@ -401,3 +404,221 @@ class FoodOfferStatsView(APIView):
         serializer = FoodOfferStatsSerializer(data=stats)
         serializer.is_valid()
         return Response(serializer.data)
+
+
+
+
+@extend_schema(
+    tags=['offers'],
+    summary="Offres pour la page d'accueil",
+    description="Endpoint public retournant les offres avec tous les filtres de la page d'accueil.",
+    parameters=[
+        # Filtre de recherche textuelle
+        OpenApiParameter(name='search', description='Recherche par nom de plat ou restaurant', required=False, type=str),
+        
+        # Filtre de distance (simulé par quartier pour l'instant)
+        OpenApiParameter(name='quarter', description='Filtrer par quartier', required=False, type=str),
+        OpenApiParameter(name='distance_km', description='Filtrer par distance (simulé)', required=False, type=int),
+        
+        # Filtre urgent (expirant bientôt)
+        OpenApiParameter(name='urgent', description='Offres expirant dans moins d\'1h', required=False, type=bool),
+        OpenApiParameter(name='expiring_hours', description='Nombre d\'heures pour expirant (défaut: 1)', required=False, type=int),
+        
+        # Filtres par catégorie
+        OpenApiParameter(name='category', description='ID de la catégorie', required=False, type=int),
+        OpenApiParameter(name='category_slug', description='Slug de la catégorie', required=False, type=str),
+        
+        # Filtre par type de partenaire (via catégorie de partenaire)
+        OpenApiParameter(name='partner_category', description='Catégorie de partenaire (restaurant, boulangerie, etc.)', required=False, type=str),
+        
+        # Filtre par prix
+        OpenApiParameter(name='max_price', description='Prix maximum (ex: 1500)', required=False, type=int),
+        OpenApiParameter(name='min_price', description='Prix minimum', required=False, type=int),
+        
+        # Options de tri
+        OpenApiParameter(name='ordering', description='Tri: time_remaining, price, distance, popularity', required=False, type=str),
+        
+        # Pagination
+        OpenApiParameter(name='page', description='Numéro de page', required=False, type=int),
+        OpenApiParameter(name='page_size', description='Nombre d\'éléments par page (défaut: 20)', required=False, type=int),
+    ],
+    responses={
+        200: PaginatedResponseSerializer(serializer=FoodOfferListSerializer),
+        400: "Paramètres invalides"
+    }
+)
+class HomeOffersView(generics.ListAPIView):
+    """
+    Endpoint public pour la page d'accueil avec tous les filtres.
+    
+    Filtres disponibles:
+    - 🔍 Recherche textuelle (search)
+    - 📍 Distance/Quartier (quarter, distance_km)
+    - ⏰ Urgent (urgent, expiring_hours)
+    - 🍽️ Catégories (category, category_slug, partner_category)
+    - 💰 Prix (max_price, min_price)
+    
+    Tri disponible:
+    - ⏱️ Temps restant (time_remaining)
+    - 💵 Prix croissant (price)
+    - 📏 Distance (distance)
+    - ⭐ Popularité (popularity)
+    """
+    serializer_class = FoodOfferListSerializer
+    permission_classes = [permissions.AllowAny]
+    pagination_class = StandardPagination  # À définir selon votre configuration
+
+    def get_queryset(self):
+        # Base queryset: offres actives uniquement
+        now = timezone.now()
+        queryset = FoodOffer.objects.filter(
+            status=FoodOffer.Status.ACTIVE,
+            pickup_deadline__gt=now,
+            available_from__lte=now,
+            partner__status='APPROVED'  # Uniquement les partenaires approuvés
+        ).select_related('partner', 'category')
+        
+        # ====================================================================
+        # 1. FILTRE DE RECHERCHE TEXTUELLE
+        # ====================================================================
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search) |
+                Q(description__icontains=search) |
+                Q(partner__name__icontains=search)
+            )
+        
+        # ====================================================================
+        # 2. FILTRES DE DISTANCE / QUARTIER
+        # ====================================================================
+        quarter = self.request.query_params.get('quarter')
+        if quarter:
+            queryset = queryset.filter(partner__quarter__icontains=quarter)
+        
+        # Note: La distance réelle nécessiterait des coordonnées GPS
+        # Pour l'instant, on simule avec le quartier
+        distance_km = self.request.query_params.get('distance_km')
+        if distance_km:
+            # Cette partie serait à implémenter avec des calculs de distance
+            # Si vous avez les coordonnées, vous pouvez filtrer par proximité
+            pass
+        
+        # ====================================================================
+        # 3. FILTRE URGENT (expirant bientôt)
+        # ====================================================================
+        urgent = self.request.query_params.get('urgent')
+        if urgent and urgent.lower() == 'true':
+            expiring_hours = int(self.request.query_params.get('expiring_hours', 1))
+            urgent_deadline = now + timezone.timedelta(hours=expiring_hours)
+            queryset = queryset.filter(pickup_deadline__lte=urgent_deadline)
+        
+        # ====================================================================
+        # 4. FILTRES PAR CATÉGORIE
+        # ====================================================================
+        # Par ID de catégorie
+        category_id = self.request.query_params.get('category')
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+        
+        # Par slug de catégorie
+        category_slug = self.request.query_params.get('category_slug')
+        if category_slug:
+            queryset = queryset.filter(category__slug=category_slug)
+        
+        # Par catégorie de partenaire (restaurant, boulangerie, etc.)
+        partner_category = self.request.query_params.get('partner_category')
+        if partner_category:
+            queryset = queryset.filter(partner__category__slug=partner_category)
+        
+        # ====================================================================
+        # 5. FILTRES DE PRIX
+        # ====================================================================
+        max_price = self.request.query_params.get('max_price')
+        if max_price:
+            try:
+                max_price_value = float(max_price)
+                queryset = queryset.filter(discounted_price__lte=max_price_value)
+            except ValueError:
+                pass
+        
+        min_price = self.request.query_params.get('min_price')
+        if min_price:
+            try:
+                min_price_value = float(min_price)
+                queryset = queryset.filter(discounted_price__gte=min_price_value)
+            except ValueError:
+                pass
+        
+        # ====================================================================
+        # 6. TRI
+        # ====================================================================
+        ordering = self.request.query_params.get('ordering', '-created_at')
+        
+        if ordering == 'time_remaining':
+            # Trier par deadline (plus proche d'abord)
+            queryset = queryset.order_by('pickup_deadline')
+        elif ordering == 'price':
+            # Prix croissant
+            queryset = queryset.order_by('discounted_price')
+        elif ordering == '-price':
+            # Prix décroissant
+            queryset = queryset.order_by('-discounted_price')
+        elif ordering == 'distance':
+            # Trier par distance (à implémenter avec les coordonnées)
+            # Par défaut, on trie par quartier
+            queryset = queryset.order_by('partner__quarter')
+        elif ordering == 'popularity':
+            # Trier par popularité (nombre de réservations)
+            queryset = queryset.annotate(
+                popularity=Count('order_items')
+            ).order_by('-popularity')
+        elif ordering == 'discount':
+            # Trier par pourcentage de réduction
+            queryset = queryset.annotate(
+                discount_percent=ExpressionWrapper(
+                    (F('original_price') - F('discounted_price')) / F('original_price') * 100,
+                    output_field=FloatField()
+                )
+            ).order_by('-discount_percent')
+        else:
+            # Tri par défaut (plus récent d'abord)
+            queryset = queryset.order_by('-created_at')
+        
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        """Override list pour ajouter des métadonnées à la réponse."""
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        # Pagination
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response_data = self.get_paginated_response(serializer.data).data
+        else:
+            serializer = self.get_serializer(queryset, many=True)
+            response_data = {
+                'count': queryset.count(),
+                'results': serializer.data
+            }
+        
+        # Ajouter des métadonnées utiles pour le frontend
+        response_data['filters_applied'] = {
+            'search': request.query_params.get('search'),
+            'quarter': request.query_params.get('quarter'),
+            'urgent': request.query_params.get('urgent'),
+            'max_price': request.query_params.get('max_price'),
+            'category': request.query_params.get('category'),
+            'ordering': request.query_params.get('ordering'),
+        }
+        
+        # Ajouter des statistiques rapides
+        response_data['quick_stats'] = {
+            'total_offers': queryset.count(),
+            'urgent_offers': queryset.filter(
+                pickup_deadline__lte=timezone.now() + timezone.timedelta(hours=1)
+            ).count() if not request.query_params.get('urgent') else None,
+        }
+        
+        return Response(response_data)
