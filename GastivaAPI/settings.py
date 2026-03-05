@@ -26,7 +26,7 @@ SECRET_KEY = 'django-insecure--xj*44vo@4rs&#74#cr@&r(%47qmrx03ge!)_0o*m-s@1$&f2-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
@@ -59,6 +59,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -80,7 +81,7 @@ AUTH_USER_MODEL = 'accounts.User'
 # DRF Settings améliorées
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # 'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.AllowAny',
@@ -143,6 +144,8 @@ SPECTACULAR_SETTINGS = {
     ],
     
 }
+
+CORS_ALLOW_ALL_ORIGINS = True 
 
 # Simple JWT settings
 from datetime import timedelta

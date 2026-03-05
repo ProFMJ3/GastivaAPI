@@ -26,7 +26,7 @@ class User(AbstractUser):
     )
     
     # Email est optionnel pour les utilisateurs togolais
-    email = models.EmailField(_('email address'), unique=True, null=True, blank=True, db_index=True)
+    email = models.EmailField(_('email address'),  null=True, blank=True, db_index=True)
     
     # Phone number validation for Togo
     phone_regex = RegexValidator(
@@ -38,6 +38,8 @@ class User(AbstractUser):
         max_length=20,
         unique=True,
         db_index=True,
+        null=True, blank=True,
+
         help_text=_("Format de numéro togolais")
     )
     
@@ -93,6 +95,8 @@ class User(AbstractUser):
             models.Index(fields=['email', 'role']),
             models.Index(fields=['phone_number', 'is_verified']),
         ]
+        constraints = []
+
 
     def __str__(self):
         return f"{self.get_full_name()} ({self.phone_number})"
@@ -122,6 +126,10 @@ class User(AbstractUser):
         if not self.username:
             # Generate username from phone_number (plus fiable que email)
             self.username = f"user_{self.phone_number}"
+
+        # Si email est une chaîne vide, le mettre à None
+        if self.email == '':
+            self.email = None
         super().save(*args, **kwargs)
 
     def clean(self):

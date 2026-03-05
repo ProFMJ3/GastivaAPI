@@ -43,10 +43,17 @@ class RegisterSerializer(serializers.ModelSerializer):
         if attrs['password'] != attrs['password2']:
             raise serializers.ValidationError({"password": "Les mots de passe ne correspondent pas."})
         
-        # Si l'email est fourni, vérifier qu'il n'existe pas déjà
-        if attrs.get('email'):
-            if User.objects.filter(email=attrs['email']).exists():
+         # Si l'email est fourni (non vide), vérifier qu'il n'existe pas déjà
+        if attrs.get('email') and attrs['email'].strip():
+            email = attrs['email'].strip()
+            if User.objects.filter(email=email).exists():
                 raise serializers.ValidationError({"email": "Cet email est déjà utilisé."})
+            attrs['email'] = email
+        else:
+            # Mettre à None si email est vide ou null
+            attrs['email'] = None
+        
+        
         
         # Vérifier que le téléphone n'existe pas déjà
         if User.objects.filter(phone_number=attrs['phone_number']).exists():

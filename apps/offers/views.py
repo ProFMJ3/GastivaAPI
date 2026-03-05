@@ -477,6 +477,10 @@ class HomeOffersView(generics.ListAPIView):
             available_from__lte=now,
             partner__status='APPROVED'  # Uniquement les partenaires approuvés
         ).select_related('partner', 'category')
+
+        print(f"📊 Total offres dans la base: {FoodOffer.objects.count()}")
+        print(f"📊 Offres actives: {FoodOffer.objects.filter(status='ACTIVE').count()}")
+        print(f"📊 Offres après filtres: {queryset.count()}")
         
         # ====================================================================
         # 1. FILTRE DE RECHERCHE TEXTUELLE
