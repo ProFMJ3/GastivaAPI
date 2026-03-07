@@ -232,3 +232,44 @@ class PaymentStatsSerializer(serializers.Serializer):
     pending_payments = serializers.IntegerField()
     payment_method_breakdown = serializers.DictField()
     daily_stats = serializers.ListField(child=serializers.DictField())
+
+
+class BalanceCheckResponseSerializer(serializers.Serializer):
+    """
+    Serializer pour la réponse de vérification de solde.
+    """
+    phone_number = serializers.CharField(
+        max_length=20,
+        help_text="Numéro de téléphone vérifié"
+    )
+    balance = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=0,
+        help_text="Solde disponible"
+    )
+    currency = serializers.CharField(
+        max_length=5,
+        default='XOF',
+        help_text="Devise (XOF)"
+    )
+    timestamp = serializers.DateTimeField(
+        help_text="Date et heure de la vérification"
+    )
+
+    class Meta:
+        ref_name = "BalanceCheckResponse"
+
+    def validate_balance(self, value):
+        """Vérifie que le solde n'est pas négatif."""
+        if value < 0:
+            raise serializers.ValidationError("Le solde ne peut pas être négatif")
+        return value
+
+    def validate_phone_number(self, value):
+        """Valide le format du numéro de téléphone (exemple pour le Togo)."""
+        if not value.startswith(('90', '91', '92', '93', '70', '71', '79','78', '99', '98', '97' ,'96')):
+            raise serializers.ValidationError(
+                "Le numéro doit être un numéro togolais valide"
+            )
+        return value

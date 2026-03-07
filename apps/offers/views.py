@@ -3,7 +3,7 @@ from rest_framework import generics, permissions, filters, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
-from drf_spectacular.utils import F, extend_schema, OpenApiParameter
+from drf_spectacular.utils import F, extend_schema, OpenApiParameter, OpenApiResponse
 from django.db.models import Q, Count, Avg, ExpressionWrapper, FloatField
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -148,6 +148,11 @@ class FoodOfferUpdateView(generics.UpdateAPIView):
     queryset = FoodOffer.objects.all()
     serializer_class = FoodOfferCreateUpdateSerializer
     permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin]
+    
+    @extend_schema(
+        request=FoodOfferStatusUpdateSerializer,
+        responses={200: FoodOfferDetailSerializer}
+    )
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -164,6 +169,7 @@ class FoodOfferDeleteView(generics.DestroyAPIView):
     """
     Delete an offer.
     """
+    serializer_class = FoodOfferDetailSerializer  
     queryset = FoodOffer.objects.all()
     permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin]
 
@@ -178,7 +184,16 @@ class FoodOfferReserveView(APIView):
     """
     Reserve an offer.
     """
+    
     permission_classes = [permissions.IsAuthenticated]
+    
+    @extend_schema(
+        request=FoodOfferReserveSerializer,
+        responses={
+            200: OpenApiResponse(description="Réservation réussie"),
+            400: OpenApiResponse(description="Quantité invalide")
+        }
+    )
 
     def post(self, request, pk):
         offer = get_object_or_404(FoodOffer, pk=pk)
@@ -211,9 +226,14 @@ class FoodOfferReserveView(APIView):
 )
 class FoodOfferReleaseView(APIView):
     """
-    Release a reservation.
+    Libère une réservation.
     """
     permission_classes = [permissions.IsAuthenticated]
+    
+    @extend_schema(
+        request=FoodOfferReserveSerializer,
+        responses={200: OpenApiResponse(description="Réservation libérée")}
+    )
 
     def post(self, request, pk):
         offer = get_object_or_404(FoodOffer, pk=pk)
@@ -626,3 +646,27 @@ class HomeOffersView(generics.ListAPIView):
         }
         
         return Response(response_data)
+
+class MyPartnerOffersListView(generics.ListAPIView):
+    """
+    Liste des offres des partenaires de l'utilisateur connecté.
+    """
+    serializer_class = FoodOfferListSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # Pour Swagger
+        if getattr(self, 'swagger_fake_view', False):
+            return FoodOffer.objects.none()
+        
+        user = self.request.user
+        if not user.is_authenticated:
+            return FoodOffer.objects.none()
+        
+        partner_ids = user.partners.values_list('id', flat=True)
+        
+        now = timezone.now()
+        return FoodOffer.objects.filter(
+            partner_id__in=partner_ids,
+            pickup_deadline__gt=now
+        ).select_related('partner', 'category').order_by('-created_at')

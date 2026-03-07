@@ -3,7 +3,7 @@ from rest_framework import generics, permissions, filters, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
-from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.utils import extend_schema, OpenApiParameter,OpenApiResponse
 from django.db.models import Q
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -15,6 +15,8 @@ from .serializers import (
     PartnerCreateUpdateSerializer, PartnerStatusUpdateSerializer,
     PartnerGeoSerializer
 )
+from apps.offers.serializers import FoodOfferListSerializer
+
 from .filters import PartnerFilter
 from .permissions import (
     IsPartnerOwnerOrReadOnly, CanCreatePartner,
@@ -300,6 +302,7 @@ class PartnerDeleteView(generics.DestroyAPIView):
     """
     Delete a partner.
     """
+    serializer_class = PartnerDetailSerializer
     queryset = Partner.objects.all()
     permission_classes = [permissions.IsAuthenticated, IsPartnerOwnerOrAdmin]
 
@@ -331,7 +334,11 @@ class PartnerOffersView(APIView):
     """
     Offers of a partner.
     """
+
     permission_classes = [permissions.AllowAny]
+    @extend_schema(
+        responses={200: FoodOfferListSerializer(many=True)}
+    )
 
     def get(self, request, pk):
         partner = get_object_or_404(Partner, pk=pk)
@@ -362,6 +369,9 @@ class PartnerAvailabilityCheckView(APIView):
     Check partner availability.
     """
     permission_classes = [permissions.AllowAny]
+    @extend_schema(
+        responses={200: OpenApiResponse(description="Disponibilité")}
+    )
 
     def get(self, request, pk):
         partner = get_object_or_404(Partner, pk=pk)
@@ -417,6 +427,9 @@ class PartnerStatsView(APIView):
     Partner statistics.
     """
     permission_classes = [permissions.AllowAny]
+    @extend_schema(
+        responses={200: OpenApiResponse(description="Statistiques")}
+    )
 
     def get(self, request, pk):
         partner = get_object_or_404(Partner, pk=pk)

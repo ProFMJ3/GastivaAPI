@@ -323,3 +323,38 @@ class OrderStatsSerializer(serializers.Serializer):
     total_revenue = serializers.DecimalField(max_digits=12, decimal_places=2)
     average_order_value = serializers.DecimalField(max_digits=8, decimal_places=2)
     most_ordered_items = serializers.ListField(child=serializers.DictField())
+
+class OrderPickupRequest(serializers.Serializer):
+    """
+    Serializer pour la requête de retrait de commande.
+    """
+    pickup_code = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=6,
+        min_length=6,
+        help_text="Code de retrait à 6 chiffres (optionnel)"
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=255,
+        help_text="Notes supplémentaires sur le retrait"
+    )
+
+    class Meta:
+        ref_name = "OrderPickupRequest"
+
+    def validate_pickup_code(self, value):
+        """
+        Valide que le code de retrait est bien au format attendu.
+        """
+        if value and not value.isdigit():
+            raise serializers.ValidationError(
+                "Le code de retrait doit contenir uniquement des chiffres"
+            )
+        if value and len(value) != 6:
+            raise serializers.ValidationError(
+                "Le code de retrait doit contenir exactement 6 chiffres"
+            )
+        return value

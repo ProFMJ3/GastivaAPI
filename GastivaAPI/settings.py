@@ -81,7 +81,7 @@ AUTH_USER_MODEL = 'accounts.User'
 # DRF Settings améliorées
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        # 'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.AllowAny',
@@ -142,6 +142,17 @@ SPECTACULAR_SETTINGS = {
         {'name': 'reviews', 'description': 'Avis et notations'},
         {'name': 'notifications', 'description': 'Notifications'},
     ],
+
+    'ENUM_NAME_OVERRIDES': {
+        'OrderStatus': 'apps.orders.models.Order.Status',
+        'OfferStatus': 'apps.offers.models.FoodOffer.Status',
+        'PartnerStatus': 'apps.partners.models.Partner.Status',
+        'PaymentStatus': 'apps.payments.models.Payment.Status',
+        'PaymentMethod': 'apps.payments.models.Payment.PaymentMethod',
+        'UserRole': 'apps.accounts.models.User.Role',
+        'NotificationType': 'apps.notifications.models.Notification.NotificationType',
+        'NotificationPriority': 'apps.notifications.models.Notification.Priority',
+    },
     
 }
 

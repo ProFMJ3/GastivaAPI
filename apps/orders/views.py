@@ -10,7 +10,7 @@ from django.shortcuts import get_object_or_404
 from .models import Order, OrderItem
 from .serializers import (
     OrderListSerializer, OrderDetailSerializer, OrderCreateSerializer,
-    OrderStatusUpdateSerializer, OrderStatsSerializer
+    OrderStatusUpdateSerializer, OrderStatsSerializer, OrderPickupRequest
 )
 from .permissions import IsOrderClientOrReadOnly, IsOrderPartnerOrClient, CanCreateOrder
 
@@ -26,12 +26,47 @@ from .permissions import IsOrderClientOrReadOnly, IsOrderPartnerOrClient, CanCre
         OpenApiParameter(name='to_date', description='Date de fin (YYYY-MM-DD)', required=False, type=str),
     ],
 )
+
+
+# class OrderListView(generics.ListAPIView):
+#     """
+#     Liste des commandes de l'utilisateur connecté.
+#     - Client : voit ses commandes
+#     - Restaurateur : voit les commandes de ses partners
+#     - Admin : voit toutes les commandes
+#     """
+#     serializer_class = OrderListSerializer
+#     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+#     filterset_fields = ['status', 'partner']
+#     ordering_fields = ['created_at', 'total_amount']
+#     ordering = ['-created_at']
+
+#     def get_queryset(self):
+#         user = self.request.user
+        
+#         if user.role == 'ADMIN':
+#             queryset = Order.objects.all()
+#         elif user.role == 'PARTNER':
+#             queryset = Order.objects.filter(partner__owner=user)
+#         else:
+#             queryset = Order.objects.filter(client=user)
+        
+#         # Filtres supplémentaires
+#         from_date = self.request.query_params.get('from_date')
+#         to_date = self.request.query_params.get('to_date')
+        
+#         if from_date:
+#             queryset = queryset.filter(created_at__date__gte=from_date)
+#         if to_date:
+#             queryset = queryset.filter(created_at__date__lte=to_date)
+        
+#         return queryset.select_related('client', 'partner').prefetch_related('items')
+
+
+
 class OrderListView(generics.ListAPIView):
     """
     Liste des commandes de l'utilisateur connecté.
-    - Client : voit ses commandes
-    - Restaurateur : voit les commandes de ses partners
-    - Admin : voit toutes les commandes
     """
     serializer_class = OrderListSerializer
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
@@ -40,7 +75,13 @@ class OrderListView(generics.ListAPIView):
     ordering = ['-created_at']
 
     def get_queryset(self):
+        # Pour Swagger
+        if getattr(self, 'swagger_fake_view', False):
+            return Order.objects.none()
+        
         user = self.request.user
+        if not user.is_authenticated:
+            return Order.objects.none()
         
         if user.role == 'ADMIN':
             queryset = Order.objects.all()
@@ -59,8 +100,6 @@ class OrderListView(generics.ListAPIView):
             queryset = queryset.filter(created_at__date__lte=to_date)
         
         return queryset.select_related('client', 'partner').prefetch_related('items')
-
-
 @extend_schema(
     tags=['orders'],
     summary="Créer une commande",
@@ -182,6 +221,11 @@ class OrderConfirmView(APIView):
     Confirme une commande.
     """
     permission_classes = [permissions.IsAuthenticated]
+    
+    @extend_schema(
+        request=None,
+        responses={200: OrderDetailSerializer}
+    )
 
     def post(self, request, pk):
         order = get_object_or_404(Order, pk=pk)
@@ -222,6 +266,10 @@ class OrderReadyView(APIView):
     Marque une commande comme prête.
     """
     permission_classes = [permissions.IsAuthenticated]
+    @extend_schema(
+        request=None,
+        responses={200: OrderDetailSerializer}
+    )
 
     def post(self, request, pk):
         order = get_object_or_404(Order, pk=pk)
@@ -261,6 +309,10 @@ class OrderPickupView(APIView):
     Marque une commande comme retirée.
     """
     permission_classes = [permissions.IsAuthenticated]
+    @extend_schema(
+        request= OrderPickupRequest,  
+        responses={200: OrderDetailSerializer}
+    )
 
     def post(self, request, pk):
         order = get_object_or_404(Order, pk=pk)
@@ -361,6 +413,9 @@ class OrderStatsView(APIView):
     Statistiques des commandes.
     """
     permission_classes = [permissions.IsAuthenticated]
+    @extend_schema(
+        responses={200: OrderStatsSerializer}  # À créer si nécessaire
+    )
 
     def get(self, request):
         user = request.user

@@ -51,6 +51,7 @@ class PartnerDashboardBaseView(APIView):
         OpenApiParameter(name='days', description='Nombre de jours pour les stats (défaut: 30)', required=False, type=int),
     ]
 )
+
 class PartnerDashboardOverviewView(PartnerDashboardBaseView):
     """
     Vue principale du dashboard partenaire.

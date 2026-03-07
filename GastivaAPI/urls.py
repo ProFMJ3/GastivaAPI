@@ -35,8 +35,8 @@ urlpatterns = [
     path('api/orders/', include('apps.orders.urls')),
     path('api/payments/', include('apps.payments.urls')),
     path('api/dashboard/', include('apps.dashboard.urls')),
-    # path('api/reviews/', include('apps.reviews.urls')),
-    # path('api/notifications/', include('apps.notifications.urls')),
+    path('api/reviews/', include('apps.reviews.urls')),
+    path('api/notifications/', include('apps.notifications.urls')),
     
     # Swagger documentation
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),

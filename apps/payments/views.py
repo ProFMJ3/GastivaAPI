@@ -2,7 +2,7 @@ from rest_framework import generics, permissions, filters, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
-from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from django.db.models import Q, Sum, Count
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -11,7 +11,7 @@ from .models import Payment
 from .serializers import (
     PaymentListSerializer, PaymentDetailSerializer, PaymentCreateSerializer,
     PaymentProcessSerializer, PaymentStatusUpdateSerializer,
-    PaymentRefundSerializer, PaymentStatsSerializer
+    PaymentRefundSerializer, PaymentStatsSerializer, BalanceCheckResponseSerializer
 )
 from .permissions import IsPaymentOwnerOrReadOnly, CanCreatePayment, CanProcessPayment
 from .services import MobileMoneySimulator
@@ -180,7 +180,6 @@ class PaymentProcessView(APIView):
         else:
             return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
 
-
 @extend_schema(
     tags=['payments'],
     summary="Vérifier le solde",
@@ -188,6 +187,10 @@ class PaymentProcessView(APIView):
     parameters=[
         OpenApiParameter(name='phone', description='Numéro de téléphone', required=True, type=str),
     ],
+    responses={
+        200: BalanceCheckResponseSerializer,  
+        400: OpenApiResponse(description="Paramètre manquant"),
+    }
 )
 class PaymentBalanceCheckView(APIView):
     """
