@@ -18,6 +18,14 @@ from .serializers import (
     PartnerOfferStatsSerializer, PartnerDashboardSerializer
 )
 
+import calendar
+from datetime import timedelta
+
+from django.db.models.functions import TruncHour, TruncDay, TruncMonth
+
+
+
+from .serializers import PartnerRevenueChartSerializer
 
 class PartnerDashboardBaseView(APIView):
     """
@@ -384,12 +392,19 @@ class PartnerDashboardOverviewView(PartnerDashboardBaseView):
         stats = []
         
         for offer in offers:
+            quantity_sold = offer.quantity_available - offer.quantity_reserved
             # Commandes pour cette offre
             order_items = OrderItem.objects.filter(
-                offer=offer,
+                offer=offer, 
                 order__status=Order.Status.PICKED_UP
             )
             
+            # Déterminer le statut SOLD_OUT
+            if offer.quantity_available <= 0:
+                status = 'SOLD_OUT'
+            else:
+                status = offer.status
+
             total_quantity_sold = order_items.aggregate(total=Sum('quantity'))['total'] or 0
             total_revenue = order_items.aggregate(
                 total=Sum(F('quantity') * F('unit_price'))
@@ -463,6 +478,11 @@ class PartnerDashboardOverviewView(PartnerDashboardBaseView):
     summary="Statistiques des offres",
     description="Retourne les statistiques détaillées pour chaque offre du partenaire.",
 )
+@extend_schema(
+    tags=['partner-dashboard'],
+    summary="Statistiques des offres",
+    description="Retourne les statistiques détaillées pour chaque offre du partenaire.",
+)
 class PartnerOffersStatsView(PartnerDashboardBaseView):
     """
     Statistiques détaillées des offres.
@@ -492,10 +512,91 @@ class PartnerOffersStatsView(PartnerDashboardBaseView):
     
     def get_offers_stats(self, partner):
         """
-        Identique à la méthode dans la vue précédente.
+        Statistiques détaillées pour chaque offre du partenaire.
         """
-        # Même implémentation que ci-dessus
-        pass
+        offers = FoodOffer.objects.filter(partner=partner)
+        stats = []
+        
+        for offer in offers:
+            # Calculer quantity_sold
+            quantity_sold = offer.quantity_available - offer.quantity_reserved
+            
+            # Commandes pour cette offre
+            order_items = OrderItem.objects.filter(
+                offer=offer, 
+                order__status=Order.Status.PICKED_UP
+            )
+            
+            # Déterminer le statut SOLD_OUT (calculé, pas stocké)
+            if offer.quantity_available <= 0:
+                status = 'SOLD_OUT'
+            else:
+                status = offer.status
+                
+            total_quantity_sold = order_items.aggregate(total=Sum('quantity'))['total'] or 0
+            total_revenue = order_items.aggregate(
+                total=Sum(F('quantity') * F('unit_price'))
+            )['total'] or 0
+            total_orders = order_items.values('order').distinct().count()
+            
+            # Taux de conversion
+            conversion_rate = (total_quantity_sold / offer.quantity_available * 100) if offer.quantity_available > 0 else 0
+            
+            # Performance
+            if conversion_rate >= 70:
+                performance = 'good'
+            elif conversion_rate >= 30:
+                performance = 'average'
+            else:
+                performance = 'poor'
+            
+            # Temps restant
+            if offer.pickup_deadline > timezone.now():
+                delta = offer.pickup_deadline - timezone.now()
+                if delta.days > 0:
+                    time_remaining = f"{delta.days}j {delta.seconds//3600}h"
+                elif delta.seconds//3600 > 0:
+                    time_remaining = f"{delta.seconds//3600}h {(delta.seconds//60)%60}min"
+                else:
+                    time_remaining = f"{delta.seconds//60}min"
+            else:
+                time_remaining = "Expirée"
+            
+            stats.append({
+                'id': offer.id,
+                'title': offer.title,
+                'discounted_price': float(offer.discounted_price),
+                'original_price': float(offer.original_price),
+                'quantity_available': offer.quantity_available,
+                'quantity_reserved': offer.quantity_reserved,
+                'quantity_sold': quantity_sold,  # 👈 Calculé
+                'status': status,  # 👈 Statut avec SOLD_OUT calculé
+                'pickup_deadline': offer.pickup_deadline,
+                'created_at': offer.created_at,
+                'total_orders': total_orders,
+                'total_quantity_sold': total_quantity_sold,
+                'total_revenue': float(total_revenue),
+                'conversion_rate': round(conversion_rate, 1),
+                'time_remaining': time_remaining,
+                'performance': performance,
+                'discount_percentage': offer.discount_percentage,
+                'category': offer.category.name if offer.category else None,
+            })
+        
+        return stats
+
+
+@extend_schema(
+    tags=['partner-dashboard'],
+    summary="Revenus par période",
+    description="Retourne les revenus pour une période spécifique.",
+    parameters=[
+        OpenApiParameter(name='partner_id', description='ID du partenaire', required=False, type=int),
+        OpenApiParameter(name='period', description='Période: day, week, month, year', required=True, type=str),
+    ]
+)
+
+
 
 
 @extend_schema(
@@ -510,6 +611,7 @@ class PartnerOffersStatsView(PartnerDashboardBaseView):
 class PartnerRevenueView(PartnerDashboardBaseView):
     """
     Revenus par période.
+    Retourne les données structurées pour les graphiques de revenus.
     """
     
     def get(self, request):
@@ -528,7 +630,7 @@ class PartnerRevenueView(PartnerDashboardBaseView):
             data = self.get_revenue_by_period(partner, period)
             return Response(data)
         else:
-            # Agrégation
+            # Agrégation pour plusieurs partenaires
             all_data = []
             for partner in partners:
                 data = self.get_revenue_by_period(partner, period)
@@ -541,38 +643,326 @@ class PartnerRevenueView(PartnerDashboardBaseView):
     
     def get_revenue_by_period(self, partner, period):
         """
-        Agrège les revenus par période.
+        Agrège les revenus par période avec structure compatible Flutter.
+        Retourne un dictionnaire avec labels, datasets (revenus et commandes).
         """
         now = timezone.now()
         
         if period == 'day':
-            # Revenus par heure aujourd'hui
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            orders = Order.objects.filter(
-                partner=partner,
-                status=Order.Status.PICKED_UP,
-                picked_up_at__gte=today_start
-            )
-            # ... implémentation
-            pass
-        
+            return self._get_daily_revenue_by_hour(partner, now)
         elif period == 'week':
-            # Revenus par jour cette semaine
-            week_start = now - timedelta(days=now.weekday())
-            week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
-            # ... implémentation
-            pass
-        
+            return self._get_weekly_revenue_by_day(partner, now)
         elif period == 'month':
-            # Revenus par jour ce mois
-            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            # ... implémentation
-            pass
-        
+            return self._get_monthly_revenue_by_day(partner, now)
         elif period == 'year':
-            # Revenus par mois cette année
-            year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-            # ... implémentation
-            pass
+            return self._get_yearly_revenue_by_month(partner, now)
+        else:
+            # Par défaut: mois
+            return self._get_monthly_revenue_by_day(partner, now)
+    
+    def _get_daily_revenue_by_hour(self, partner, now):
+        """
+        Revenus par heure pour aujourd'hui.
+        """
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
         
-        return {}
+        # Commandes complétées aujourd'hui, groupées par heure
+        hourly_data = Order.objects.filter(
+            partner=partner,
+            status=Order.Status.PICKED_UP,
+            picked_up_at__gte=today_start,
+            picked_up_at__lt=today_end
+        ).annotate(
+            hour=TruncHour('picked_up_at')
+        ).values('hour').annotate(
+            revenue=Sum('total_amount'),
+            orders=Count('id')
+        ).order_by('hour')
+        
+        # Préparer les données pour toutes les heures (0-23)
+        labels = []
+        revenue_data = []
+        orders_data = []
+        
+        # Créer un dictionnaire pour un accès facile
+        revenue_dict = {}
+        for item in hourly_data:
+            hour_key = item['hour'].hour
+            revenue_dict[hour_key] = {
+                'revenue': float(item['revenue']),
+                'orders': item['orders']
+            }
+        
+        # Remplir toutes les heures
+        for hour in range(24):
+            labels.append(f"{hour:02d}:00")
+            if hour in revenue_dict:
+                revenue_data.append(revenue_dict[hour]['revenue'])
+                orders_data.append(revenue_dict[hour]['orders'])
+            else:
+                revenue_data.append(0)
+                orders_data.append(0)
+        
+        # Calculer les totaux
+        total_revenue = sum(revenue_data)
+        total_orders = sum(orders_data)
+        
+        return {
+            'period': 'day',
+            'labels': labels,
+            'datasets': [
+                {
+                    'label': 'Revenus (FCFA)',
+                    'data': revenue_data,
+                    'borderColor': '#4CAF50',
+                    'backgroundColor': 'rgba(76, 175, 80, 0.1)',
+                },
+                {
+                    'label': 'Commandes',
+                    'data': orders_data,
+                    'borderColor': '#2196F3',
+                    'backgroundColor': 'rgba(33, 150, 243, 0.1)',
+                }
+            ],
+            'summary': {
+                'total_revenue': total_revenue,
+                'total_orders': total_orders,
+                'average_order_value': round(total_revenue / total_orders, 2) if total_orders > 0 else 0,
+                'peak_hour': revenue_data.index(max(revenue_data)) if max(revenue_data) > 0 else None,
+            }
+        }
+    
+    def _get_weekly_revenue_by_day(self, partner, now):
+        """
+        Revenus par jour pour cette semaine.
+        """
+        # Début de la semaine (lundi)
+        week_start = now - timedelta(days=now.weekday())
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_end = week_start + timedelta(days=7)
+        
+        # Commandes complétées cette semaine, groupées par jour
+        daily_data = Order.objects.filter(
+            partner=partner,
+            status=Order.Status.PICKED_UP,
+            picked_up_at__gte=week_start,
+            picked_up_at__lt=week_end
+        ).annotate(
+            day=TruncDay('picked_up_at')
+        ).values('day').annotate(
+            revenue=Sum('total_amount'),
+            orders=Count('id')
+        ).order_by('day')
+        
+        # Jours de la semaine
+        days_fr = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche']
+        labels = []
+        revenue_data = []
+        orders_data = []
+        
+        # Créer un dictionnaire pour un accès facile
+        revenue_dict = {}
+        for item in daily_data:
+            day_key = item['day'].date()
+            revenue_dict[day_key] = {
+                'revenue': float(item['revenue']),
+                'orders': item['orders']
+            }
+        
+        # Remplir tous les jours de la semaine
+        for i in range(7):
+            current_day = week_start + timedelta(days=i)
+            day_date = current_day.date()
+            day_name = days_fr[current_day.weekday()]
+            labels.append(f"{day_name} {day_date.strftime('%d/%m')}")
+            
+            if day_date in revenue_dict:
+                revenue_data.append(revenue_dict[day_date]['revenue'])
+                orders_data.append(revenue_dict[day_date]['orders'])
+            else:
+                revenue_data.append(0)
+                orders_data.append(0)
+        
+        total_revenue = sum(revenue_data)
+        total_orders = sum(orders_data)
+        
+        return {
+            'period': 'week',
+            'labels': labels,
+            'datasets': [
+                {
+                    'label': 'Revenus (FCFA)',
+                    'data': revenue_data,
+                    'borderColor': '#4CAF50',
+                    'backgroundColor': 'rgba(76, 175, 80, 0.1)',
+                },
+                {
+                    'label': 'Commandes',
+                    'data': orders_data,
+                    'borderColor': '#2196F3',
+                    'backgroundColor': 'rgba(33, 150, 243, 0.1)',
+                }
+            ],
+            'summary': {
+                'total_revenue': total_revenue,
+                'total_orders': total_orders,
+                'average_order_value': round(total_revenue / total_orders, 2) if total_orders > 0 else 0,
+                'best_day': days_fr[revenue_data.index(max(revenue_data))] if max(revenue_data) > 0 else None,
+            }
+        }
+    
+    def _get_monthly_revenue_by_day(self, partner, now):
+        """
+        Revenus par jour pour ce mois.
+        """
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
+        # Dernier jour du mois
+        last_day = calendar.monthrange(now.year, now.month)[1]
+        month_end = month_start.replace(day=last_day) + timedelta(days=1)
+        
+        # Commandes complétées ce mois, groupées par jour
+        daily_data = Order.objects.filter(
+            partner=partner,
+            status=Order.Status.PICKED_UP,
+            picked_up_at__gte=month_start,
+            picked_up_at__lt=month_end
+        ).annotate(
+            day=TruncDay('picked_up_at')
+        ).values('day').annotate(
+            revenue=Sum('total_amount'),
+            orders=Count('id')
+        ).order_by('day')
+        
+        labels = []
+        revenue_data = []
+        orders_data = []
+        
+        # Créer un dictionnaire pour un accès facile
+        revenue_dict = {}
+        for item in daily_data:
+            day_key = item['day'].date()
+            revenue_dict[day_key] = {
+                'revenue': float(item['revenue']),
+                'orders': item['orders']
+            }
+        
+        # Remplir tous les jours du mois
+        for day in range(1, last_day + 1):
+            current_date = month_start.replace(day=day).date()
+            labels.append(current_date.strftime('%d/%m'))
+            
+            if current_date in revenue_dict:
+                revenue_data.append(revenue_dict[current_date]['revenue'])
+                orders_data.append(revenue_dict[current_date]['orders'])
+            else:
+                revenue_data.append(0)
+                orders_data.append(0)
+        
+        total_revenue = sum(revenue_data)
+        total_orders = sum(orders_data)
+        
+        return {
+            'period': 'month',
+            'labels': labels,
+            'datasets': [
+                {
+                    'label': 'Revenus (FCFA)',
+                    'data': revenue_data,
+                    'borderColor': '#4CAF50',
+                    'backgroundColor': 'rgba(76, 175, 80, 0.1)',
+                },
+                {
+                    'label': 'Commandes',
+                    'data': orders_data,
+                    'borderColor': '#2196F3',
+                    'backgroundColor': 'rgba(33, 150, 243, 0.1)',
+                }
+            ],
+            'summary': {
+                'total_revenue': total_revenue,
+                'total_orders': total_orders,
+                'average_order_value': round(total_revenue / total_orders, 2) if total_orders > 0 else 0,
+                'total_days_with_orders': len([v for v in revenue_data if v > 0]),
+            }
+        }
+    
+    def _get_yearly_revenue_by_month(self, partner, now):
+        """
+        Revenus par mois pour cette année.
+        """
+        year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        year_end = year_start.replace(year=now.year + 1)
+        
+        # Commandes complétées cette année, groupées par mois
+        monthly_data = Order.objects.filter(
+            partner=partner,
+            status=Order.Status.PICKED_UP,
+            picked_up_at__gte=year_start,
+            picked_up_at__lt=year_end
+        ).annotate(
+            month=TruncMonth('picked_up_at')
+        ).values('month').annotate(
+            revenue=Sum('total_amount'),
+            orders=Count('id')
+        ).order_by('month')
+        
+        # Mois en français
+        months_fr = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 
+                     'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
+        labels = []
+        revenue_data = []
+        orders_data = []
+        
+        # Créer un dictionnaire pour un accès facile
+        revenue_dict = {}
+        for item in monthly_data:
+            month_key = item['month'].month
+            revenue_dict[month_key] = {
+                'revenue': float(item['revenue']),
+                'orders': item['orders']
+            }
+        
+        # Remplir tous les mois de l'année
+        for month in range(1, 13):
+            labels.append(months_fr[month - 1])
+            
+            if month in revenue_dict:
+                revenue_data.append(revenue_dict[month]['revenue'])
+                orders_data.append(revenue_dict[month]['orders'])
+            else:
+                revenue_data.append(0)
+                orders_data.append(0)
+        
+        total_revenue = sum(revenue_data)
+        total_orders = sum(orders_data)
+        
+        return {
+            'period': 'year',
+            'labels': labels,
+            'datasets': [
+                {
+                    'label': 'Revenus (FCFA)',
+                    'data': revenue_data,
+                    'borderColor': '#4CAF50',
+                    'backgroundColor': 'rgba(76, 175, 80, 0.1)',
+                },
+                {
+                    'label': 'Commandes',
+                    'data': orders_data,
+                    'borderColor': '#2196F3',
+                    'backgroundColor': 'rgba(33, 150, 243, 0.1)',
+                }
+            ],
+            'summary': {
+                'total_revenue': total_revenue,
+                'total_orders': total_orders,
+                'average_order_value': round(total_revenue / total_orders, 2) if total_orders > 0 else 0,
+                'best_month': months_fr[revenue_data.index(max(revenue_data))] if max(revenue_data) > 0 else None,
+                'q1_revenue': sum(revenue_data[0:3]),  # Jan-Mar
+                'q2_revenue': sum(revenue_data[3:6]),  # Avr-Juin
+                'q3_revenue': sum(revenue_data[6:9]),  # Juil-Sept
+                'q4_revenue': sum(revenue_data[9:12]),  # Oct-Déc
+            }
+        }

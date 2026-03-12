@@ -57,3 +57,4 @@ class CanManageOffer(permissions.BasePermission):
             return request.user.partners.filter(id=partner_id).exists()
         
         return True
+

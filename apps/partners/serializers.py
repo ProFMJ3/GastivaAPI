@@ -136,7 +136,7 @@ class PartnerDetailSerializer(serializers.ModelSerializer):
     def get_reviews_summary(self, obj):
         """Summary of partner reviews."""
         from apps.reviews.models import Review
-        reviews = Review.objects.filter(partner=obj, is_visible=True)
+        reviews = Review.objects.filter( order__offer__partner=obj, is_visible=True)
         total = reviews.count()
         avg = reviews.aggregate(avg=Avg('rating'))['avg'] or 0
         

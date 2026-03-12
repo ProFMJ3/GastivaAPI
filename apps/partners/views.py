@@ -20,8 +20,9 @@ from apps.offers.serializers import FoodOfferListSerializer
 from .filters import PartnerFilter
 from .permissions import (
     IsPartnerOwnerOrReadOnly, CanCreatePartner,
-    IsAdminForStatusUpdate, IsPartnerOwnerOrAdmin
+    IsAdminForStatusUpdate, IsPartnerOwnerOrAdmin, IsPartner
 )
+
 
 
 # ============================================================================
@@ -474,3 +475,99 @@ class PartnerStatsView(APIView):
                 'distribution': rating_dist
             }
         })
+
+
+
+@extend_schema(
+    tags=['partner-offers'],
+    summary="Get all offers for a partner",
+    description="Returns all offers of a specific partner with active offers first in the list.",
+    parameters=[
+        OpenApiParameter(
+            name='partner_id',
+            type=int,
+            location=OpenApiParameter.PATH,
+            description='ID of the partner',
+            required=True,
+        ),
+    ],
+)
+class PartnerOffersListView(generics.ListAPIView):
+    """
+    List all offers for a specific partner.
+    Active offers are displayed first, followed by others.
+    """
+    serializer_class = FoodOfferListSerializer
+    permission_classes = [permissions.IsAuthenticated, IsPartner]
+
+    def get_queryset(self):
+        partner_id = self.kwargs.get('partner_id')
+        now = timezone.now()
+
+        # Vérifier que l'utilisateur connecté est bien le propriétaire du partenaire
+        # À adapter selon votre logique d'authentification
+        if not self.request.user.partner_set.filter(id=partner_id).exists():
+            return FoodOffer.objects.none()
+
+        # Récupérer toutes les offres du partenaire
+        queryset = FoodOffer.objects.filter(
+            partner_id=partner_id
+        ).select_related(
+            'partner', 'category'
+        ).annotate(
+            # Annoter pour trier: les ACTIVES et non expirées en premier
+            is_active_first=models.Case(
+                models.When(
+                    status=FoodOffer.Status.ACTIVE,
+                    pickup_deadline__gt=now,
+                    then=models.Value(0)
+                ),
+                default=models.Value(1),
+                output_field=models.IntegerField()
+            )
+        ).order_by(
+            'is_active_first',  # Les actives d'abord
+            '-is_featured',      # Ensuite les mises en avant
+            '-created_at'        # Enfin les plus récentes
+        )
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        
+        # Récupérer le premier élément pour les infos du partenaire
+        first_offer = queryset.first()
+        
+        if not first_offer:
+            # Si pas d'offres, on retourne un objet vide avec les infos du partenaire
+            # À adapter selon votre modèle Partner
+            from partners.models import Partner
+            try:
+                partner = Partner.objects.get(id=self.kwargs.get('partner_id'))
+                partner_name = partner.name
+                partner_quarter = partner.quarter
+                partner_logo = partner.logo.url if partner.logo else None
+            except Partner.DoesNotExist:
+                partner_name = None
+                partner_quarter = None
+                partner_logo = None
+        else:
+            partner_name = first_offer.partner.name
+            partner_quarter = first_offer.partner.quarter
+            partner_logo = first_offer.partner.logo.url if first_offer.partner.logo else None
+
+        # Sérialiser les offres
+        serializer = self.get_serializer(queryset, many=True)
+
+        # Construire la réponse au format demandé
+        response_data = {
+            "partner_id": self.kwargs.get('partner_id'),
+            "partner_name": partner_name,
+            "partner_quarter": partner_quarter,
+            "partner_logo": partner_logo,
+            "total_offers": queryset.count(),
+            "offers": serializer.data
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)

@@ -30,3 +30,6 @@ class CanProcessPayment(permissions.BasePermission):
     """
     def has_object_permission(self, request, view, obj):
         return obj.order.client == request.user or request.user.role == 'ADMIN'
+
+
+    

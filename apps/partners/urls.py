@@ -102,4 +102,10 @@ urlpatterns = [
     path('<int:pk>/stats/',
          views.PartnerStatsView.as_view(),
          name='partner-stats'),
+
+     path(
+        '<int:partner_id>/offers/',
+        views.PartnerOffersListView.as_view(),
+        name='partner-offers-list'
+    ),
 ]

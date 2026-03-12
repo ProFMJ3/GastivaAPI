@@ -22,6 +22,7 @@ from .permissions import IsOfferOwnerOrReadOnly, CanCreateOffer, IsOwnerOrAdmin
 from apps.partners.models import Partner
 
 
+
 # ============================================================================
 # VIEWS FOR CATEGORIES
 # ============================================================================
@@ -323,6 +324,8 @@ class FoodOfferExpiringSoonListView(generics.ListAPIView):
         ).select_related('partner', 'category').order_by('pickup_deadline')
 
 
+
+
 @extend_schema(
     tags=['offers'],
     summary="Offers by partner",
@@ -350,6 +353,7 @@ class FoodOfferByPartnerListView(generics.ListAPIView):
     summary="My partner offers",
     description="Return offers of my partners (for authenticated partner).",
 )
+
 class MyPartnerOffersListView(generics.ListAPIView):
     """
     List of offers from all partners owned by the current user.
@@ -670,3 +674,5 @@ class MyPartnerOffersListView(generics.ListAPIView):
             partner_id__in=partner_ids,
             pickup_deadline__gt=now
         ).select_related('partner', 'category').order_by('-created_at')
+
+

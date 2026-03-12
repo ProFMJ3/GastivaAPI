@@ -37,6 +37,7 @@ class FoodOffer(models.Model):
         RESERVED = 'RESERVED', _('Reserved')
         EXPIRED = 'EXPIRED', _('Expired')
         CANCELLED = 'CANCELLED', _('Cancelled')
+        SOLD_OUT = 'SOLD_OUT', _('Sold Out')  # 👈 Ajouté
 
     partner = models.ForeignKey(
         Partner,
@@ -70,6 +71,11 @@ class FoodOffer(models.Model):
         validators=[MinValueValidator(0)]
     )
     quantity_reserved = models.IntegerField(
+        default=0,
+        validators=[MinValueValidator(0)]
+    )
+
+    quantity_sold = models.IntegerField(  # 👈 Nouveau champ
         default=0,
         validators=[MinValueValidator(0)]
     )
@@ -140,6 +146,21 @@ class FoodOffer(models.Model):
         self.quantity_reserved = max(0, self.quantity_reserved - quantity)
         self.save(update_fields=['quantity_reserved', 'status'])
 
+
+    def confirm_sale(self, quantity=1):
+        """
+        Confirm sale when order is completed.
+        Moves reserved quantity to sold.
+        """
+        if quantity > self.quantity_reserved:
+            quantity = self.quantity_reserved
+        
+        self.quantity_reserved -= quantity
+        self.quantity_sold += quantity
+        self.save(update_fields=['quantity_reserved', 'quantity_sold', 'status'])
+        return True
+
+
     def update_status(self):
         """
         Update offer status based on current state.
@@ -165,3 +186,20 @@ class FoodOffer(models.Model):
         # Default to active
         if self.status != self.Status.ACTIVE:
             self.status = self.Status.ACTIVE
+
+    def save(self, *args, **kwargs):
+            """
+            Override save to update status before saving.
+            """
+            # Validation personnalisée
+            if self.discounted_price >= self.original_price:
+                raise ValidationError({
+                    'discounted_price': _('Le prix réduit doit être inférieur au prix original')
+                })
+            
+            # Mettre à jour le statut avant la sauvegarde
+            self.update_status()
+            
+            super().save(*args, **kwargs)
+
+

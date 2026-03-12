@@ -1,6 +1,26 @@
 from django.contrib import admin
 from .models import CategoryPartner, Partner
+from django import forms
 
+class PartnerAdminForm(forms.ModelForm):
+    working_days = forms.MultipleChoiceField(
+        choices=[
+            ('monday', 'Lundi'),
+            ('tuesday', 'Mardi'),
+            ('wednesday', 'Mercredi'),
+            ('thursday', 'Jeudi'),
+            ('friday', 'Vendredi'),
+            ('saturday', 'Samedi'),
+            ('sunday', 'Dimanche'),
+        ],
+        widget=forms.CheckboxSelectMultiple,
+        required=False,
+        help_text="Sélectionnez les jours d'ouverture"
+    )
+    
+    class Meta:
+        model = Partner
+        fields = '__all__'
 
 @admin.register(CategoryPartner)
 class CategoryPartnerAdmin(admin.ModelAdmin):
@@ -13,6 +33,7 @@ class CategoryPartnerAdmin(admin.ModelAdmin):
 
 @admin.register(Partner)
 class PartnerAdmin(admin.ModelAdmin):
+    form = PartnerAdminForm
     """Simple admin for partners."""
     list_display = ['name', 'category', 'quarter', 'phone', 'status']
     list_filter = ['status', 'category', 'quarter']
