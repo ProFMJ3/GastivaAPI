@@ -83,6 +83,15 @@ class User(AbstractUser):
         null=True,
         blank=True
     )
+
+    favorite_address = models.CharField(
+        max_length=255, 
+        null=True, 
+        blank=True,
+        default='Non renseigné'
+    )
+    notifications_enabled = models.BooleanField(default=True)
+    language = models.CharField(max_length=10, default='Français')
     
     # Utiliser phone_number comme identifiant principal pour l'authentification
     #USERNAME_FIELD = 'phone_number'

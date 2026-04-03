@@ -7,9 +7,6 @@ from apps.offers.serializers import FoodOfferListSerializer
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
-    """
-    Serializer pour les articles de commande.
-    """
     offer_title = serializers.CharField(source='offer.title', read_only=True)
     offer_image = serializers.ImageField(source='offer.image', read_only=True)
     partner_name = serializers.CharField(source='offer.partner.name', read_only=True)
@@ -24,28 +21,21 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
 
 class OrderItemCreateSerializer(serializers.ModelSerializer):
-    """
-    Serializer pour la création d'articles de commande.
-    """
     class Meta:
         model = OrderItem
         fields = ['offer', 'quantity']
 
     def validate(self, data):
-        """Vérifier la disponibilité de l'offre."""
         offer = data['offer']
         quantity = data['quantity']
-        
         if not offer.is_available:
             raise serializers.ValidationError(
                 f"L'offre '{offer.title}' n'est plus disponible."
             )
-        
         if quantity > offer.remaining_quantity:
             raise serializers.ValidationError(
                 f"Quantité demandée ({quantity}) supérieure à la disponibilité ({offer.remaining_quantity})"
             )
-        
         return data
 
 
@@ -60,14 +50,18 @@ class OrderListSerializer(serializers.ModelSerializer):
     items_count = serializers.SerializerMethodField()
     time_remaining = serializers.SerializerMethodField()
     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    # ── Ajouts pour l'affichage image dans la liste ────────────
+    first_item_title = serializers.SerializerMethodField()
+    first_item_image = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
         fields = [
             'id', 'order_number', 'client_name', 'client_phone',
             'partner_name', 'partner_quarter', 'status', 'status_display',
-            'total_amount', 'pickup_code', 'items_count', 'time_remaining',
-            'created_at', 'confirmed_at', 'picked_up_at'
+            'total_amount', 'pickup_code', 'items_count',
+            'first_item_title', 'first_item_image',
+            'time_remaining', 'created_at', 'confirmed_at', 'picked_up_at'
         ]
         read_only_fields = ['id', 'order_number', 'pickup_code', 'created_at']
 
@@ -77,18 +71,31 @@ class OrderListSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.CharField)
     def get_time_remaining(self, obj):
-        """Temps restant avant confirmation (simulé)."""
         if obj.status == 'PENDING' and obj.created_at:
             elapsed = timezone.now() - obj.created_at
-            remaining = max(0, 15 - elapsed.seconds // 60)  # 15 minutes pour payer
+            remaining = max(0, 15 - elapsed.seconds // 60)
             return f"{remaining} minutes"
+        return None
+
+    @extend_schema_field(serializers.CharField)
+    def get_first_item_title(self, obj):
+        """Titre du premier article."""
+        first = obj.items.first()
+        return first.offer.title if first else None
+
+    @extend_schema_field(serializers.CharField)
+    def get_first_item_image(self, obj):
+        """Image du premier article — URL absolue."""
+        first = obj.items.first()
+        if first and first.offer.image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(first.offer.image.url)
+            return first.offer.image.url
         return None
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
-    """
-    Serializer pour les détails d'une commande.
-    """
     client_details = serializers.SerializerMethodField()
     partner_details = serializers.SerializerMethodField()
     items = OrderItemSerializer(many=True, read_only=True)
@@ -129,10 +136,9 @@ class OrderDetailSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.CharField)
     def get_time_remaining(self, obj):
-        """Temps restant avant expiration pour les commandes en attente."""
         if obj.status == 'PENDING' and obj.created_at:
             elapsed = timezone.now() - obj.created_at
-            remaining_seconds = max(0, 15 * 60 - elapsed.seconds)  # 15 minutes
+            remaining_seconds = max(0, 15 * 60 - elapsed.seconds)
             minutes = remaining_seconds // 60
             seconds = remaining_seconds % 60
             return f"{minutes:02d}:{seconds:02d}"
@@ -140,22 +146,16 @@ class OrderDetailSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.BooleanField)
     def get_can_cancel(self, obj):
-        """Vérifier si la commande peut être annulée."""
-        return obj.status in ['PENDING', 'CONFIRMED']
+        # Seulement PENDING — dès que confirmé plus d'annulation
+        return obj.status == 'PENDING'
 
     @extend_schema_field(serializers.BooleanField)
     def get_can_confirm(self, obj):
-        """Vérifier si la commande peut être confirmée (pour le partner)."""
         return obj.status == 'PENDING'
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
-    """
-    Serializer pour la création d'une commande.
-    """
     items = OrderItemCreateSerializer(many=True)
-    
-    # Champs en lecture seule qui seront retournés après création
     order_number = serializers.CharField(read_only=True)
     pickup_code = serializers.CharField(read_only=True)
     created_at = serializers.DateTimeField(read_only=True)
@@ -166,110 +166,82 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         fields = ['order_number', 'pickup_code', 'status', 'created_at', 'notes', 'items']
 
     def validate_items(self, value):
-        """Valider qu'il y a au moins un article."""
         if not value:
             raise serializers.ValidationError("Au moins un article est requis.")
         return value
 
     def validate(self, data):
-        """Validation globale."""
         items = data.get('items', [])
-        
         if not items:
             return data
-        
-        # Vérifier que tous les articles sont du même partner
+
         first_offer = items[0]['offer']
         partner = first_offer.partner
-        
-        # Vérifications de disponibilité
         total_amount = 0
         items_details = []
-        
+
         for item in items:
             offer = item['offer']
             quantity = item['quantity']
-            
-            # Vérifier que l'offre est disponible
+
             if not offer.is_available:
                 raise serializers.ValidationError(
                     f"L'offre '{offer.title}' n'est plus disponible."
                 )
-            
-            # Vérifier la quantité disponible
             if quantity > offer.remaining_quantity:
                 raise serializers.ValidationError(
                     f"L'offre '{offer.title}' n'a que {offer.remaining_quantity} disponible(s)."
                 )
-            
-            # Vérifier que tous les articles sont du même partner
             if item['offer'].partner != partner:
                 raise serializers.ValidationError(
                     "Tous les articles doivent provenir du même partner."
                 )
-            
+
             total_amount += offer.discounted_price * quantity
             items_details.append({
                 'offer': offer,
                 'quantity': quantity,
                 'unit_price': offer.discounted_price
             })
-        
+
         data['partner'] = partner
         data['total_amount'] = total_amount
         data['items_details'] = items_details
-        
         return data
 
     def create(self, validated_data):
-        """Créer la commande et ses articles."""
         items_details = validated_data.pop('items_details')
-        validated_data.pop('items')  # Retirer les items bruts
-        
+        validated_data.pop('items')
         validated_data['client'] = self.context['request'].user
         validated_data['partner'] = validated_data.pop('partner')
         validated_data['total_amount'] = validated_data.pop('total_amount')
         validated_data['status'] = Order.Status.PENDING
-        
-        # Créer la commande (le numéro et code sont générés automatiquement dans save)
+
         order = Order.objects.create(**validated_data)
-        
-        # Créer les articles et réserver les quantités
+
         for item_data in items_details:
             offer = item_data['offer']
             quantity = item_data['quantity']
-            
-            # Réserver la quantité (maintenant la méthode existe)
             offer.reserve(quantity)
-            
-            # Créer l'article
             OrderItem.objects.create(
                 order=order,
                 offer=offer,
                 quantity=quantity,
                 unit_price=offer.discounted_price
             )
-        
+
         return order
 
 
 class OrderStatusUpdateSerializer(serializers.ModelSerializer):
-    """
-    Serializer pour la mise à jour du statut.
-    """
     class Meta:
         model = Order
         fields = ['status', 'cancellation_reason']
-        extra_kwargs = {
-            'cancellation_reason': {'required': False}
-        }
+        extra_kwargs = {'cancellation_reason': {'required': False}}
 
     def validate(self, data):
-        """Valider le changement de statut."""
         order = self.instance
         new_status = data.get('status')
-        
-        # Vérifier les transitions valides
         valid_transitions = {
             'PENDING': ['CONFIRMED', 'CANCELLED'],
             'CONFIRMED': ['READY', 'CANCELLED'],
@@ -277,43 +249,30 @@ class OrderStatusUpdateSerializer(serializers.ModelSerializer):
             'PICKED_UP': [],
             'CANCELLED': []
         }
-        
         if new_status not in valid_transitions.get(order.status, []):
             raise serializers.ValidationError(
                 f"Transition de {order.status} vers {new_status} non autorisée."
             )
-        
-        # Raison d'annulation requise pour l'annulation
         if new_status == 'CANCELLED' and not data.get('cancellation_reason'):
             raise serializers.ValidationError(
                 "Une raison d'annulation est requise."
             )
-        
         return data
 
     def update(self, instance, validated_data):
-        """Mettre à jour le statut avec la date correspondante."""
         new_status = validated_data.get('status')
-        
-        # Mettre à jour les timestamps selon le statut
         if new_status == 'CONFIRMED':
             instance.confirmed_at = timezone.now()
         elif new_status == 'PICKED_UP':
             instance.picked_up_at = timezone.now()
         elif new_status == 'CANCELLED':
             instance.cancelled_at = timezone.now()
-            
-            # Libérer les réservations
             for item in instance.items.all():
                 item.offer.release_reservation(item.quantity)
-        
         return super().update(instance, validated_data)
 
 
 class OrderStatsSerializer(serializers.Serializer):
-    """
-    Serializer pour les statistiques des commandes.
-    """
     total_orders = serializers.IntegerField()
     pending_orders = serializers.IntegerField()
     confirmed_orders = serializers.IntegerField()
@@ -324,20 +283,15 @@ class OrderStatsSerializer(serializers.Serializer):
     average_order_value = serializers.DecimalField(max_digits=8, decimal_places=2)
     most_ordered_items = serializers.ListField(child=serializers.DictField())
 
+
 class OrderPickupRequest(serializers.Serializer):
-    """
-    Serializer pour la requête de retrait de commande.
-    """
     pickup_code = serializers.CharField(
-        required=False,
-        allow_blank=True,
-        max_length=6,
-        min_length=6,
+        required=False, allow_blank=True,
+        max_length=6, min_length=6,
         help_text="Code de retrait à 6 chiffres (optionnel)"
     )
     notes = serializers.CharField(
-        required=False,
-        allow_blank=True,
+        required=False, allow_blank=True,
         max_length=255,
         help_text="Notes supplémentaires sur le retrait"
     )
@@ -346,9 +300,6 @@ class OrderPickupRequest(serializers.Serializer):
         ref_name = "OrderPickupRequest"
 
     def validate_pickup_code(self, value):
-        """
-        Valide que le code de retrait est bien au format attendu.
-        """
         if value and not value.isdigit():
             raise serializers.ValidationError(
                 "Le code de retrait doit contenir uniquement des chiffres"

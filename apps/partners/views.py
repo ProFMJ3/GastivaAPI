@@ -6,6 +6,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, OpenApiParameter,OpenApiResponse
 from django.db.models import Q
 from django.utils import timezone
+from apps.offers.models import FoodOffer
 from django.shortcuts import get_object_or_404
 
 from .models import CategoryPartner, Partner
@@ -567,7 +568,9 @@ class PartnerOffersListView(generics.ListAPIView):
     Active offers are displayed first, followed by others.
     """
     serializer_class = FoodOfferListSerializer
-    permission_classes = [permissions.IsAuthenticated, IsPartner]
+    permission_classes = [permissions.AllowAny]  # Pour tester sans auth
+    # OU
+    permission_classes = [permissions.IsAuthenticated] 
 
     def get_queryset(self):
         partner_id = self.kwargs.get('partner_id')
