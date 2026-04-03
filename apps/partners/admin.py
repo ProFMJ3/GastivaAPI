@@ -40,7 +40,7 @@ class PartnerAdmin(admin.ModelAdmin):
     search_fields = ['name', 'phone', 'email']
     fieldsets = (
         ('Info', {
-            'fields': ('owner', 'name', 'category', 'description')
+            'fields': ('owner', 'name', 'category', 'logo', 'cover_image', 'description')
         }),
         ('Contact', {
             'fields': ('address', 'quarter', 'phone', 'email')
