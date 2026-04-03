@@ -67,4 +67,39 @@ urlpatterns = [
     path('<int:pk>/pickup/',
          views.OrderPickupView.as_view(),
          name='order-pickup'),
+
+
+         # URLs pour les partenaires
+    path('partner/orders/',
+         views.PartnerOrdersListView.as_view(),
+         name='partner-orders-list'),
+    
+    path('partner/orders/<int:pk>/',
+         views.PartnerOrderDetailView.as_view(),
+         name='partner-order-detail'),
+    
+    path('partner/orders/<int:pk>/update-status/',
+         views.PartnerOrderStatusUpdateView.as_view(),
+         name='partner-order-update-status'),
+    
+    path('partner/orders/stats/',
+         views.PartnerOrdersStatsView.as_view(),
+         name='partner-orders-stats'),
+
+          # URLs pour les commandes par établissement
+    path('partner/establishment/<int:partner_id>/orders/',
+         views.PartnerEstablishmentOrdersView.as_view(),
+         name='partner-establishment-orders'),
+    
+    path('partner/establishment/<int:partner_id>/orders/<int:order_id>/',
+         views.PartnerEstablishmentOrderDetailView.as_view(),
+         name='partner-establishment-order-detail'),
+    
+    path('partner/establishment/<int:partner_id>/orders/<int:order_id>/update-status/',
+         views.PartnerEstablishmentOrderStatusUpdateView.as_view(),
+         name='partner-establishment-order-update-status'),
+    
+    path('partner/establishment/<int:partner_id>/orders/stats/',
+         views.PartnerEstablishmentOrdersStatsView.as_view(),
+         name='partner-establishment-orders-stats'),
 ]

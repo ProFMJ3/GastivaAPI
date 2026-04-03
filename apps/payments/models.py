@@ -15,7 +15,7 @@ class Payment(models.Model):
     
     class PaymentMethod(models.TextChoices):
         TMONEY = 'TMONEY', _('T-Money')
-        FLOZ = 'FLOOZ', _('Flooz')
+        FLOOZ = 'FLOOZ', _('Flooz')
         CASH = 'CASH', _('Cash')
 
     class Status(models.TextChoices):

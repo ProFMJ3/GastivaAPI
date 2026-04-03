@@ -2,7 +2,7 @@ from rest_framework import generics, permissions, filters, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
-from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.utils import extend_schema, OpenApiParameter,OpenApiResponse
 from django.db.models import Q, Sum, Count
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -13,6 +13,15 @@ from .serializers import (
     OrderStatusUpdateSerializer, OrderStatsSerializer, OrderPickupRequest
 )
 from .permissions import IsOrderClientOrReadOnly, IsOrderPartnerOrClient, CanCreateOrder
+
+from django_filters.rest_framework import DjangoFilterBackend
+from django.db.models import Q, Sum, Count
+
+
+from apps.orders.models import Order
+from apps.orders.serializers import OrderListSerializer, OrderDetailSerializer
+from apps.partners.models import Partner
+from apps.accounts.permissions import IsPartnerOrAdmin
 
 
 @extend_schema(
@@ -473,4 +482,703 @@ class OrderStatsView(APIView):
         
         serializer = OrderStatsSerializer(data=stats)
         serializer.is_valid()
+        return Response(serializer.data)
+
+
+
+@extend_schema(
+    tags=['partner-orders'],
+    summary="Liste des commandes du partenaire",
+    description="Retourne toutes les commandes des établissements de l'utilisateur connecté (rôle PARTNER).",
+    parameters=[
+        OpenApiParameter(name='partner_id', description='ID du partenaire spécifique (optionnel)', required=False, type=int),
+        OpenApiParameter(name='status', description='Filtrer par statut', required=False, type=str),
+        OpenApiParameter(name='from_date', description='Date de début (YYYY-MM-DD)', required=False, type=str),
+        OpenApiParameter(name='to_date', description='Date de fin (YYYY-MM-DD)', required=False, type=str),
+        OpenApiParameter(name='search', description='Recherche par numéro de commande ou nom client', required=False, type=str),
+        OpenApiParameter(name='ordering', description='Tri (ex: -created_at, total_amount)', required=False, type=str),
+        OpenApiParameter(name='page', description='Numéro de page', required=False, type=int),
+        OpenApiParameter(name='page_size', description='Nombre d\'éléments par page', required=False, type=int),
+    ],
+    responses={
+        200: OpenApiResponse(
+            description="Liste paginée des commandes",
+            response=OrderListSerializer(many=True)
+        ),
+        403: OpenApiResponse(description="Non autorisé"),
+    }
+)
+class PartnerOrdersListView(generics.ListAPIView):
+    """
+    Vue pour les partenaires : récupère les commandes de leurs établissements.
+    Un partenaire peut avoir plusieurs établissements.
+    """
+    serializer_class = OrderListSerializer
+    permission_classes = [permissions.IsAuthenticated, IsPartnerOrAdmin]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['order_number', 'client__first_name', 'client__last_name', 'client__phone_number']
+    ordering_fields = ['created_at', 'total_amount', 'status']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        user = self.request.user
+        
+        # Vérifier que l'utilisateur est bien un partenaire
+        if user.role != 'PARTNER' and not user.is_staff:
+            return Order.objects.none()
+        
+        # Récupérer tous les partenaires de l'utilisateur
+        partners = Partner.objects.filter(owner=user)
+        partner_ids = partners.values_list('id', flat=True)
+        
+        # Base queryset : commandes de tous les partenaires de l'utilisateur
+        queryset = Order.objects.filter(
+            partner_id__in=partner_ids
+        ).select_related(
+            'client', 'partner'
+        ).prefetch_related('items', 'items__offer')
+        
+        # Filtre optionnel par partenaire spécifique
+        partner_id = self.request.query_params.get('partner_id')
+        if partner_id:
+            # Vérifier que le partenaire appartient bien à l'utilisateur
+            if int(partner_id) in partner_ids:
+                queryset = queryset.filter(partner_id=partner_id)
+            else:
+                # Si l'ID ne correspond pas à un partenaire de l'utilisateur
+                return Order.objects.none()
+        
+        # Filtre par statut
+        status = self.request.query_params.get('status')
+        if status:
+            queryset = queryset.filter(status=status)
+        
+        # Filtre par date
+        from_date = self.request.query_params.get('from_date')
+        if from_date:
+            queryset = queryset.filter(created_at__date__gte=from_date)
+        
+        to_date = self.request.query_params.get('to_date')
+        if to_date:
+            queryset = queryset.filter(created_at__date__lte=to_date)
+        
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        """Override pour ajouter des métadonnées supplémentaires."""
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        # Statistiques rapides pour l'en-tête
+        total_orders = queryset.count()
+        total_revenue = queryset.filter(
+            status='PICKED_UP'
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+        
+        # Compter par statut
+        pending_count = queryset.filter(status='PENDING').count()
+        confirmed_count = queryset.filter(status='CONFIRMED').count()
+        ready_count = queryset.filter(status='READY').count()
+        completed_count = queryset.filter(status='PICKED_UP').count()
+        cancelled_count = queryset.filter(status='CANCELLED').count()
+        
+        # Pagination
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response_data = self.get_paginated_response(serializer.data).data
+        else:
+            serializer = self.get_serializer(queryset, many=True)
+            response_data = {
+                'count': total_orders,
+                'results': serializer.data
+            }
+        
+        # Ajouter les métadonnées
+        response_data['metadata'] = {
+            'total_orders': total_orders,
+            'total_revenue': float(total_revenue),
+            'counts_by_status': {
+                'PENDING': pending_count,
+                'CONFIRMED': confirmed_count,
+                'READY': ready_count,
+                'PICKED_UP': completed_count,
+                'CANCELLED': cancelled_count,
+            }
+        }
+        
+        # Informations sur les partenaires disponibles
+        partners = Partner.objects.filter(owner=request.user).values('id', 'name')
+        response_data['available_partners'] = list(partners)
+        
+        return Response(response_data)
+
+
+@extend_schema(
+    tags=['partner-orders'],
+    summary="Détails d'une commande",
+    description="Retourne les détails complets d'une commande spécifique d'un partenaire.",
+)
+class PartnerOrderDetailView(generics.RetrieveAPIView):
+    """
+    Détails d'une commande pour un partenaire.
+    Vérifie que la commande appartient bien à un établissement de l'utilisateur.
+    """
+    serializer_class = OrderDetailSerializer
+    permission_classes = [permissions.IsAuthenticated, IsPartnerOrAdmin]
+
+    def get_queryset(self):
+        user = self.request.user
+        partners = Partner.objects.filter(owner=user)
+        partner_ids = partners.values_list('id', flat=True)
+        
+        return Order.objects.filter(
+            partner_id__in=partner_ids
+        ).select_related(
+            'client', 'partner'
+        ).prefetch_related('items', 'items__offer')
+
+
+@extend_schema(
+    tags=['partner-orders'],
+    summary="Statistiques des commandes",
+    description="Retourne des statistiques détaillées sur les commandes du partenaire.",
+    parameters=[
+        OpenApiParameter(name='partner_id', description='ID du partenaire (optionnel)', required=False, type=int),
+        OpenApiParameter(name='days', description='Nombre de jours (défaut: 30)', required=False, type=int),
+    ],
+)
+class PartnerOrdersStatsView(APIView):
+    """
+    Statistiques détaillées des commandes pour un partenaire.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPartnerOrAdmin]
+
+    def get(self, request):
+        user = request.user
+        partners = Partner.objects.filter(owner=user)
+        partner_ids = partners.values_list('id', flat=True)
+        
+        # Filtrer par partenaire spécifique si demandé
+        partner_id = request.query_params.get('partner_id')
+        if partner_id and int(partner_id) in partner_ids:
+            partner_ids = [int(partner_id)]
+        
+        days = int(request.query_params.get('days', 30))
+        since = timezone.now() - timezone.timedelta(days=days)
+        
+        # Commandes de la période
+        orders = Order.objects.filter(
+            partner_id__in=partner_ids,
+            created_at__gte=since
+        )
+        
+        # Statistiques globales
+        total_orders = orders.count()
+        total_revenue = orders.filter(
+            status='PICKED_UP'
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+        
+        # Commandes par statut
+        orders_by_status = {}
+        for status_code, _ in Order.Status.choices:
+            count = orders.filter(status=status_code).count()
+            if count > 0:
+                orders_by_status[status_code] = count
+        
+        # Commandes par jour
+        daily_orders = orders.extra(
+            {'day': "date(created_at)"}
+        ).values('day').annotate(
+            count=Count('id'),
+            revenue=Sum('total_amount', filter=Q(status='PICKED_UP'))
+        ).order_by('day')
+        
+        # Top clients
+        top_clients = orders.filter(
+            status='PICKED_UP'
+        ).values(
+            'client__id', 'client__first_name', 'client__last_name'
+        ).annotate(
+            order_count=Count('id'),
+            total_spent=Sum('total_amount')
+        ).order_by('-total_spent')[:5]
+        
+        # Top offres vendues
+        from apps.orders.models import OrderItem
+        top_offers = OrderItem.objects.filter(
+            order__partner_id__in=partner_ids,
+            order__status='PICKED_UP',
+            order__created_at__gte=since
+        ).values(
+            'offer__id', 'offer__title'
+        ).annotate(
+            total_quantity=Sum('quantity'),
+            total_revenue=Sum('subtotal')
+        ).order_by('-total_quantity')[:5]
+        
+        return Response({
+            'period': {
+                'days': days,
+                'start': since.date().isoformat(),
+                'end': timezone.now().date().isoformat(),
+            },
+            'overview': {
+                'total_orders': total_orders,
+                'total_revenue': float(total_revenue),
+                'average_order_value': float(total_revenue / total_orders) if total_orders > 0 else 0,
+            },
+            'orders_by_status': orders_by_status,
+            'daily_orders': [
+                {
+                    'date': item['day'],
+                    'count': item['count'],
+                    'revenue': float(item['revenue']) if item['revenue'] else 0,
+                }
+                for item in daily_orders
+            ],
+            'top_clients': [
+                {
+                    'client_id': item['client__id'],
+                    'name': f"{item['client__first_name']} {item['client__last_name']}".strip(),
+                    'order_count': item['order_count'],
+                    'total_spent': float(item['total_spent']),
+                }
+                for item in top_clients
+            ],
+            'top_offers': [
+                {
+                    'offer_id': item['offer__id'],
+                    'title': item['offer__title'],
+                    'total_quantity': item['total_quantity'],
+                    'total_revenue': float(item['total_revenue']),
+                }
+                for item in top_offers
+            ],
+        })
+
+
+@extend_schema(
+    tags=['partner-orders'],
+    summary="Mettre à jour le statut d'une commande",
+    description="Permet au partenaire de mettre à jour le statut d'une commande.",
+)
+class PartnerOrderStatusUpdateView(APIView):
+    """
+    Mise à jour du statut d'une commande par le partenaire.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPartnerOrAdmin]
+
+    def patch(self, request, pk):
+        # Vérifier que la commande appartient au partenaire
+        user = request.user
+        partners = Partner.objects.filter(owner=user)
+        partner_ids = partners.values_list('id', flat=True)
+        
+        order = get_object_or_404(
+            Order,
+            id=pk,
+            partner_id__in=partner_ids
+        )
+        
+        new_status = request.data.get('status')
+        if not new_status:
+            return Response(
+                {'error': 'Le statut est requis'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Vérifier les transitions valides
+        valid_transitions = {
+            'PENDING': ['CONFIRMED', 'CANCELLED'],
+            'CONFIRMED': ['READY', 'CANCELLED'],
+            'READY': ['PICKED_UP', 'CANCELLED'],
+        }
+        
+        if new_status not in valid_transitions.get(order.status, []):
+            return Response(
+                {'error': f'Transition de {order.status} vers {new_status} non autorisée'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Mettre à jour le statut
+        order.status = new_status
+        
+        # Mettre à jour les timestamps
+        if new_status == 'CONFIRMED':
+            order.confirmed_at = timezone.now()
+        elif new_status == 'READY':
+            order.ready_at = timezone.now()
+        elif new_status == 'PICKED_UP':
+            order.picked_up_at = timezone.now()
+        elif new_status == 'CANCELLED':
+            order.cancelled_at = timezone.now()
+            order.cancellation_reason = request.data.get('reason', 'Annulée par le partenaire')
+        
+        order.save()
+        
+        serializer = OrderDetailSerializer(order)
+        return Response(serializer.data)
+
+
+
+
+
+
+
+
+@extend_schema(
+    tags=['partner-orders'],
+    summary="Commandes d'un établissement",
+    description="Retourne toutes les commandes d'un établissement spécifique (le propriétaire doit être connecté).",
+    parameters=[
+        OpenApiParameter(name='status', description='Filtrer par statut', required=False, type=str),
+        OpenApiParameter(name='from_date', description='Date de début (YYYY-MM-DD)', required=False, type=str),
+        OpenApiParameter(name='to_date', description='Date de fin (YYYY-MM-DD)', required=False, type=str),
+        OpenApiParameter(name='search', description='Recherche par numéro de commande ou nom client', required=False, type=str),
+        OpenApiParameter(name='ordering', description='Tri (ex: -created_at, total_amount)', required=False, type=str),
+        OpenApiParameter(name='page', description='Numéro de page', required=False, type=int),
+        OpenApiParameter(name='page_size', description='Nombre d\'éléments par page', required=False, type=int),
+    ],
+    responses={
+        200: OpenApiResponse(
+            description="Liste paginée des commandes",
+            response=OrderListSerializer(many=True)
+        ),
+        403: OpenApiResponse(description="Non autorisé - Vous n'êtes pas le propriétaire de cet établissement"),
+        404: OpenApiResponse(description="Établissement non trouvé"),
+    }
+)
+class PartnerEstablishmentOrdersView(generics.ListAPIView):
+    """
+    Vue pour récupérer les commandes d'un établissement spécifique.
+    Vérifie que l'utilisateur connecté est bien le propriétaire du partenaire.
+    """
+    serializer_class = OrderListSerializer
+    permission_classes = [permissions.IsAuthenticated, IsPartnerOrAdmin]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['order_number', 'client__first_name', 'client__last_name', 'client__phone_number']
+    ordering_fields = ['created_at', 'total_amount', 'status']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        user = self.request.user
+        
+        # Récupérer l'ID du partenaire depuis l'URL
+        partner_id = self.kwargs.get('partner_id')
+        
+        # Vérifier que le partenaire existe et appartient à l'utilisateur
+        partner = get_object_or_404(Partner, id=partner_id)
+        
+        # Vérifier que l'utilisateur est bien le propriétaire
+        if partner.owner != user and not user.is_staff:
+            return Order.objects.none()
+        
+        # Base queryset : commandes de ce partenaire uniquement
+        queryset = Order.objects.filter(
+            partner=partner
+        ).select_related(
+            'client', 'partner'
+        ).prefetch_related('items', 'items__offer')
+        
+        # Filtre par statut
+        status = self.request.query_params.get('status')
+        if status:
+            queryset = queryset.filter(status=status)
+        
+        # Filtre par date
+        from_date = self.request.query_params.get('from_date')
+        if from_date:
+            queryset = queryset.filter(created_at__date__gte=from_date)
+        
+        to_date = self.request.query_params.get('to_date')
+        if to_date:
+            queryset = queryset.filter(created_at__date__lte=to_date)
+        
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        """Override pour ajouter des métadonnées sur l'établissement."""
+        partner_id = self.kwargs.get('partner_id')
+        partner = get_object_or_404(Partner, id=partner_id)
+        
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        # Statistiques rapides pour cet établissement
+        total_orders = queryset.count()
+        total_revenue = queryset.filter(
+            status='PICKED_UP'
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+        
+        # Compter par statut
+        pending_count = queryset.filter(status='PENDING').count()
+        confirmed_count = queryset.filter(status='CONFIRMED').count()
+        ready_count = queryset.filter(status='READY').count()
+        completed_count = queryset.filter(status='PICKED_UP').count()
+        cancelled_count = queryset.filter(status='CANCELLED').count()
+        
+        # Pagination
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response_data = self.get_paginated_response(serializer.data).data
+        else:
+            serializer = self.get_serializer(queryset, many=True)
+            response_data = {
+                'count': total_orders,
+                'results': serializer.data
+            }
+        
+        # Ajouter les informations de l'établissement et les métadonnées
+        response_data['establishment'] = {
+            'id': partner.id,
+            'name': partner.name,
+            'quarter': partner.quarter,
+            'address': partner.address,
+            'phone': partner.phone,
+            'is_open': partner.is_open_now(),
+            'status': partner.status,
+        }
+        
+        response_data['metadata'] = {
+            'total_orders': total_orders,
+            'total_revenue': float(total_revenue),
+            'average_order_value': float(total_revenue / total_orders) if total_orders > 0 else 0,
+            'counts_by_status': {
+                'PENDING': pending_count,
+                'CONFIRMED': confirmed_count,
+                'READY': ready_count,
+                'PICKED_UP': completed_count,
+                'CANCELLED': cancelled_count,
+            }
+        }
+        
+        return Response(response_data)
+
+
+@extend_schema(
+    tags=['partner-orders'],
+    summary="Détails d'une commande pour un établissement",
+    description="Retourne les détails d'une commande spécifique, en vérifiant qu'elle appartient bien à l'établissement.",
+)
+class PartnerEstablishmentOrderDetailView(generics.RetrieveAPIView):
+    """
+    Détails d'une commande pour un établissement spécifique.
+    """
+    serializer_class = OrderDetailSerializer
+    permission_classes = [permissions.IsAuthenticated, IsPartnerOrAdmin]
+
+    def get_queryset(self):
+        user = self.request.user
+        partner_id = self.kwargs.get('partner_id')
+        
+        # Vérifier que le partenaire existe et appartient à l'utilisateur
+        partner = get_object_or_404(Partner, id=partner_id)
+        
+        if partner.owner != user and not user.is_staff:
+            return Order.objects.none()
+        
+        return Order.objects.filter(
+            partner=partner
+        ).select_related(
+            'client', 'partner'
+        ).prefetch_related('items', 'items__offer')
+
+
+@extend_schema(
+    tags=['partner-orders'],
+    summary="Statistiques d'un établissement",
+    description="Retourne des statistiques détaillées sur les commandes d'un établissement.",
+    parameters=[
+        OpenApiParameter(name='days', description='Nombre de jours (défaut: 30)', required=False, type=int),
+    ],
+)
+class PartnerEstablishmentOrdersStatsView(APIView):
+    """
+    Statistiques détaillées des commandes pour un établissement.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPartnerOrAdmin]
+
+    def get(self, request, partner_id):
+        user = request.user
+        
+        # Vérifier que le partenaire existe et appartient à l'utilisateur
+        partner = get_object_or_404(Partner, id=partner_id)
+        
+        if partner.owner != user and not user.is_staff:
+            return Response(
+                {"detail": "Vous n'êtes pas autorisé à consulter les statistiques de cet établissement."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        days = int(request.query_params.get('days', 30))
+        since = timezone.now() - timezone.timedelta(days=days)
+        
+        # Commandes de la période
+        orders = Order.objects.filter(
+            partner=partner,
+            created_at__gte=since
+        )
+        
+        # Statistiques globales
+        total_orders = orders.count()
+        total_revenue = orders.filter(
+            status='PICKED_UP'
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+        
+        # Commandes par statut
+        orders_by_status = {}
+        for status_code, _ in Order.Status.choices:
+            count = orders.filter(status=status_code).count()
+            if count > 0:
+                orders_by_status[status_code] = count
+        
+        # Commandes par jour
+        daily_orders = orders.extra(
+            {'day': "date(created_at)"}
+        ).values('day').annotate(
+            count=Count('id'),
+            revenue=Sum('total_amount', filter=Q(status='PICKED_UP'))
+        ).order_by('day')
+        
+        # Top clients
+        top_clients = orders.filter(
+            status='PICKED_UP'
+        ).values(
+            'client__id', 'client__first_name', 'client__last_name'
+        ).annotate(
+            order_count=Count('id'),
+            total_spent=Sum('total_amount')
+        ).order_by('-total_spent')[:5]
+        
+        # Top offres vendues
+        from apps.orders.models import OrderItem
+        top_offers = OrderItem.objects.filter(
+            order__partner=partner,
+            order__status='PICKED_UP',
+            order__created_at__gte=since
+        ).values(
+            'offer__id', 'offer__title'
+        ).annotate(
+            total_quantity=Sum('quantity'),
+            total_revenue=Sum('subtotal')
+        ).order_by('-total_quantity')[:5]
+        
+        # Informations sur l'établissement
+        establishment_info = {
+            'id': partner.id,
+            'name': partner.name,
+            'quarter': partner.quarter,
+            'address': partner.address,
+            'phone': partner.phone,
+            'opening_time': partner.opening_time.strftime('%H:%M') if partner.opening_time else None,
+            'closing_time': partner.closing_time.strftime('%H:%M') if partner.closing_time else None,
+            'is_open': partner.is_open_now(),
+            'status': partner.status,
+        }
+        
+        return Response({
+            'establishment': establishment_info,
+            'period': {
+                'days': days,
+                'start': since.date().isoformat(),
+                'end': timezone.now().date().isoformat(),
+            },
+            'overview': {
+                'total_orders': total_orders,
+                'total_revenue': float(total_revenue),
+                'average_order_value': float(total_revenue / total_orders) if total_orders > 0 else 0,
+            },
+            'orders_by_status': orders_by_status,
+            'daily_orders': [
+                {
+                    'date': item['day'],
+                    'count': item['count'],
+                    'revenue': float(item['revenue']) if item['revenue'] else 0,
+                }
+                for item in daily_orders
+            ],
+            'top_clients': [
+                {
+                    'client_id': item['client__id'],
+                    'name': f"{item['client__first_name']} {item['client__last_name']}".strip(),
+                    'order_count': item['order_count'],
+                    'total_spent': float(item['total_spent']),
+                }
+                for item in top_clients
+            ],
+            'top_offers': [
+                {
+                    'offer_id': item['offer__id'],
+                    'title': item['offer__title'],
+                    'total_quantity': item['total_quantity'],
+                    'total_revenue': float(item['total_revenue']),
+                }
+                for item in top_offers
+            ],
+        })
+
+
+@extend_schema(
+    tags=['partner-orders'],
+    summary="Mettre à jour le statut d'une commande",
+    description="Permet au propriétaire de l'établissement de mettre à jour le statut d'une commande.",
+)
+class PartnerEstablishmentOrderStatusUpdateView(APIView):
+    """
+    Mise à jour du statut d'une commande par le propriétaire de l'établissement.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPartnerOrAdmin]
+
+    def patch(self, request, partner_id, order_id):
+        user = request.user
+        
+        # Vérifier que le partenaire existe et appartient à l'utilisateur
+        partner = get_object_or_404(Partner, id=partner_id)
+        
+        if partner.owner != user and not user.is_staff:
+            return Response(
+                {"detail": "Vous n'êtes pas autorisé à modifier les commandes de cet établissement."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Récupérer la commande
+        order = get_object_or_404(Order, id=order_id, partner=partner)
+        
+        new_status = request.data.get('status')
+        if not new_status:
+            return Response(
+                {'error': 'Le statut est requis'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Vérifier les transitions valides
+        valid_transitions = {
+            'PENDING': ['CONFIRMED', 'CANCELLED'],
+            'CONFIRMED': ['READY', 'CANCELLED'],
+            'READY': ['PICKED_UP', 'CANCELLED'],
+        }
+        
+        if new_status not in valid_transitions.get(order.status, []):
+            return Response(
+                {'error': f'Transition de {order.status} vers {new_status} non autorisée'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Mettre à jour le statut
+        order.status = new_status
+        
+        # Mettre à jour les timestamps
+        if new_status == 'CONFIRMED':
+            order.confirmed_at = timezone.now()
+        elif new_status == 'READY':
+            order.ready_at = timezone.now()
+        elif new_status == 'PICKED_UP':
+            order.picked_up_at = timezone.now()
+        elif new_status == 'CANCELLED':
+            order.cancelled_at = timezone.now()
+            order.cancellation_reason = request.data.get('reason', 'Annulée par le partenaire')
+        
+        order.save()
+        
+        serializer = OrderDetailSerializer(order)
         return Response(serializer.data)

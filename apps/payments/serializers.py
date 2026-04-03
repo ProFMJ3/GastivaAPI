@@ -43,7 +43,7 @@ class PaymentListSerializer(serializers.ModelSerializer):
     Serializer pour la liste des paiements.
     """
     order_number = serializers.CharField(source='order.order_number', read_only=True)
-    restaurant_name = serializers.CharField(source='order.restaurant.name', read_only=True)
+    partner_name = serializers.CharField(source='order.partner.name', read_only=True)
     client_name = serializers.CharField(source='order.client.get_full_name', read_only=True)
     payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
@@ -53,7 +53,7 @@ class PaymentListSerializer(serializers.ModelSerializer):
         model = Payment
         fields = [
             'id', 'transaction_id', 'order', 'order_number', 'amount',
-            'restaurant_name', 'client_name', 'payment_method', 'payment_method_display',
+            'partner_name', 'client_name', 'payment_method', 'payment_method_display',
             'status', 'status_display', 'status_color', 'paid_at', 'created_at'
         ]
 
@@ -93,7 +93,7 @@ class PaymentDetailSerializer(serializers.ModelSerializer):
         return {
             'id': obj.order.id,
             'order_number': obj.order.order_number,
-            'restaurant': obj.order.restaurant.name,
+            'partner': obj.order.partner.name,
             'client': obj.order.client.get_full_name(),
             'total_amount': float(obj.order.total_amount),
             'status': obj.order.status
